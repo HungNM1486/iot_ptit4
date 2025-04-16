@@ -1,9 +1,12 @@
-import * as tf from "@tensorflow/tfjs-node";
-import fs from "fs";
-import path from "path";
-import sharp from "sharp";
+const tf = require("@tensorflow/tfjs-node");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const express = require("express");
 
-const MODEL_PATH = "/media/zuyanh/New Volume/iot-node/tfjs_model";
+const sharp = require("sharp");
+
+const MODEL_PATH = process.env.MODEL_PATH || path.join(process.cwd(), "tfjs_model");
 
 const PLANT_DISEASE_CLASSES = [
   "Pepper_bell_healthy",
@@ -24,34 +27,41 @@ const PLANT_DISEASE_CLASSES = [
 ];
 
 class ImagePredictionService {
-  private model: tf.LayersModel | null;
-  private labels: string[] | null;
-  private isLoaded: boolean;
-
   constructor() {
     this.model = null;
     this.labels = null;
     this.isLoaded = false;
+    
+    // Đảm bảo thư mục model tồn tại
+    if (!fs.existsSync(MODEL_PATH)) {
+      console.warn(`Thư mục model không tồn tại: ${MODEL_PATH}`);
+    }
   }
 
   async loadModel() {
     try {
       console.log("Đang tải model...");
+      console.log(`Đường dẫn model: ${MODEL_PATH}/model_fixed2.json`);
+      
       this.model = await tf.loadLayersModel(
         `file://${MODEL_PATH}/model_fixed2.json`
       );
 
-      if (fs.existsSync(path.join(MODEL_PATH, "labels.json"))) {
+      const labelsPath = path.join(MODEL_PATH, "labels.json");
+      if (fs.existsSync(labelsPath)) {
         this.labels = JSON.parse(
-          fs.readFileSync(path.join(MODEL_PATH, "labels.json"), "utf8")
+          fs.readFileSync(labelsPath, "utf8")
         );
+        console.log("Đã tải labels thành công!");
+      } else {
+        console.log("File labels không tồn tại, sử dụng classes mặc định.");
       }
 
       this.isLoaded = true;
       console.log("Đã tải model thành công!");
     } catch (error) {
       console.error("Lỗi khi tải model:", error);
-      throw new Error("Không thể tải model");
+      throw new Error(`Không thể tải model: ${error.message}`);
     }
   }
 
@@ -63,6 +73,13 @@ class ImagePredictionService {
 
   async preprocessImage(imagePath) {
     try {
+      console.log(`Đang xử lý ảnh: ${imagePath}`);
+      
+      // Kiểm tra tồn tại của file
+      if (!fs.existsSync(imagePath)) {
+        throw new Error(`File ảnh không tồn tại: ${imagePath}`);
+      }
+      
       const imageBuffer = await sharp(imagePath).resize(224, 224).toBuffer();
 
       const imageTensor = tf.node.decodeImage(imageBuffer, 3);
@@ -74,16 +91,17 @@ class ImagePredictionService {
       return batchedImage;
     } catch (error) {
       console.error("Lỗi khi tiền xử lý ảnh:", error);
-      throw new Error("Không thể xử lý ảnh");
+      throw new Error(`Không thể xử lý ảnh: ${error.message}`);
     }
   }
 
   async predict(imagePath) {
-    await this.ensureModelLoaded();
-
     try {
+      await this.ensureModelLoaded();
+
       const inputTensor = await this.preprocessImage(imagePath);
 
+      console.log("Đang thực hiện dự đoán...");
       const predictions = await this.model.predict(inputTensor);
 
       const predictionData = Array.isArray(predictions)
@@ -93,21 +111,34 @@ class ImagePredictionService {
       const predictionArray = Array.from(predictionData);
       const maxProbability = Math.max(...predictionArray);
       const classIndex = predictionArray.indexOf(maxProbability);
+      
+      // Kiểm tra tính hợp lệ của classIndex
+      if (classIndex < 0 || classIndex >= PLANT_DISEASE_CLASSES.length) {
+        throw new Error(`Class index không hợp lệ: ${classIndex}`);
+      }
 
       const results = {
         prediction: classIndex,
         className: PLANT_DISEASE_CLASSES[classIndex],
+        probability: maxProbability,
+        allProbabilities: predictionArray.map((prob, idx) => ({
+          className: PLANT_DISEASE_CLASSES[idx],
+          probability: prob
+        }))
       };
 
+      // Giải phóng bộ nhớ tensor
       tf.dispose(inputTensor);
       tf.dispose(predictions);
 
+      console.log(`Kết quả dự đoán: ${results.className} (${maxProbability})`);
       return results;
     } catch (error) {
       console.error("Lỗi khi dự đoán:", error);
-      throw new Error("Không thể thực hiện dự đoán");
+      throw new Error(`Không thể thực hiện dự đoán: ${error.message}`);
     }
   }
 }
 
-export default new ImagePredictionService();
+const service = new ImagePredictionService();
+module.exports = service;

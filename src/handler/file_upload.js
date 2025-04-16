@@ -1,17 +1,29 @@
-import multer from "multer";
-import { Router } from "express";
-import path from "path";
-import fs from "fs";
-import crypto from "crypto";
-import predictService from "../services/image_predict";
+const multer = require("multer");
+const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+const predictService = require("../services/image_predict");
 
-const router = Router();
+const router = express.Router(); 
+
+// Đảm bảo thư mục temp và uploads tồn tại
+const tempDir = path.join(process.cwd(), "temp");
+const uploadDir = path.join(process.cwd(), "uploads");
+
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+}
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, "temp/");
   },
-  filename: (req, file: Express.Multer.File, cb) => {
+  filename: (req, file, cb) => {
     const tempFilename = `temp_${Date.now()}_${Math.round(
       Math.random() * 1000000
     )}`;
@@ -92,12 +104,10 @@ router.post("/upload/complete", async (req, res) => {
   }
 
   try {
-    const expectedChunks = Array.from(
-      { length: parseInt(totalChunks) },
-      (_, i) => i
-    );
+    // Khai báo mảng missingChunks
     const missingChunks = [];
-
+    
+    // Kiểm tra các chunk đã tải lên
     for (let i = 0; i < totalChunks; i++) {
       const chunkPath = path.join("temp", `${fileId}_${i}`);
 
@@ -116,18 +126,26 @@ router.post("/upload/complete", async (req, res) => {
       return;
     }
 
-    const file = path.join("uploads", fileName);
+    // Tạo đường dẫn đầy đủ với uploadDir
+    const file = path.join(uploadDir, fileName);
     const writeStream = fs.createWriteStream(file);
 
+    // Ghép các chunk
     for (let i = 0; i < totalChunks; i++) {
       const chunkPath = path.join("temp", `${fileId}_${i}`);
       const chunk = fs.readFileSync(chunkPath);
 
       writeStream.write(chunk);
-      fs.unlinkSync(chunkPath);
+      fs.unlinkSync(chunkPath); // Xóa chunk sau khi sử dụng
     }
 
     writeStream.end();
+
+    // Đợi writeStream hoàn thành trước khi dự đoán
+    await new Promise((resolve, reject) => {
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
 
     const result = await predictService.predict(file);
 
@@ -137,11 +155,12 @@ router.post("/upload/complete", async (req, res) => {
       filePath: file,
     });
   } catch (error) {
+    console.error("Error completing upload:", error);
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || "Error processing file",
     });
   }
 });
 
-export default router;
+module.exports = router;

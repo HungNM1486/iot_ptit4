@@ -1,0 +1,31 @@
+version: '3'
+services:
+  mongodb:
+    image: mongo
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    volumes:
+      - mongo-data:/data/db
+  backend:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app  # Mount thư mục hiện tại vào container để có thể thay đổi mã nguồn trực tiếp
+      - /app/node_modules
+      - ./uploads:/app/uploads
+      - ./temp:/app/temp
+    environment:
+      - MONGODB_URI=mongodb://admin:password@mongodb:27017/smart_agriculture
+    depends_on:
+      - mongodb
+    networks:
+      - my-app
+networks:
+  my-app:
+    driver: bridge
+volumes:
+  mongo-data:
